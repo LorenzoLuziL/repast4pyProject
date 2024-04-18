@@ -244,6 +244,13 @@ def restore_agent(agent_data: Tuple):
         alpha.state = agent_data[1]
         alpha.pt=pt
         return alpha
+    if uid[1]== Neuron.TYPE:
+        neuron=Neuron(uid[0], uid[1], uid[2], agent_data[1])
+        neuron.alpha_synuclein_level=agent_data[3]
+        neuron.misfolding_level=agent_data[3]
+        neuron.oligomer_level=agent_data[4]
+        neuron.lewyBodies_level=agent_data[5]
+    return neuron
 @dataclass
 class Counts:
     alpha:int=0
@@ -268,9 +275,9 @@ class Model:
         self.runner.schedule_end_event(self.at_end)
 
         fpath = params['file_rete']
-        self.contextNet = ctx.SharedContext(comm)
-        read_network(fpath, self.contextNet, create_neuron_agent, restore_neuron)
-        self.net = self.contextNet.get_projection('neuron_network')
+        self.context = ctx.SharedContext(comm)
+        read_network(fpath, self.context, create_neuron_agent, restore_agent)
+        self.net = self.context.get_projection('neuron_network')
 
         self.neuron_spreaders = []
         self.rank = comm.Get_rank()
@@ -310,14 +317,10 @@ class Model:
             a=Alpha(i,self.rank,pt)
             self.context.add(a)
             self.grid.move(a,pt)
-        count=0
-        for a in self.contextNet.agents():
-            if(a.uid[2]==self.rank):
+        for a in self.context.agents():
                 x = int(random.default_rng.uniform(local_bounds.xmin, local_bounds.xmin + local_bounds.xextent))
                 y = int(random.default_rng.uniform(local_bounds.ymin, local_bounds.ymin + local_bounds.yextent))
                 pt=dpt(x,y,0)
-                a=Neuron(a.uid[0],Neuron.TYPE,a.uid[2])
-                self.context.add(a)
                 self.grid.move(a,pt)
         self.grid_agent=self.getGridAgent()
         # for agent in self.net.graph.nodes:
@@ -391,7 +394,7 @@ class Model:
                         if not self.contains(ngh):
                             new_neuron_spreaders.append(ngh)
         agent_removed=0
-        for agent in self.contextNet.agents():
+        for agent in self.context.agents(Neuron.TYPE):
             self.agent_features.log_row(self.runner.schedule.tick,agent.uid,agent.misfolding_level)
             agent_removed+=agent.step()
         self.agent_features.write()
@@ -400,7 +403,6 @@ class Model:
         self.countsNeuron.total_neuron_spreaders += self.countsNeuron.new_neuron_spreaders+agent_removed
         self.data_set_diffousori.log(self.runner.schedule.tick)
 
-        self.contextNet.synchronize(restore_neuron)
     def contains(self,a):
         for agent in self.neuron_spreaders:
             if agent.uid[0]==a.uid[0] and agent.uid[2]==a.uid[2]:
@@ -459,6 +461,7 @@ class Model:
         self.neuron_data.close()
         for agent in self.context.agents(Neuron.TYPE):
             print(agent,agent.alpha_synuclein_level,agent.misfolding_level,agent.oligomer_level,agent.lewyBodies_level)
+            print(self.grid.get_location(agent))
         # print(self.context.agents())
     def start(self):
         self.runner.execute()
