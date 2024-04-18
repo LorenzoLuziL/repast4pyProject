@@ -8,14 +8,14 @@ import numba
 from numba import int32, int64
 from numba.experimental import jitclass
 import networkx as nx
-from repast4py import core, space, schedule, logging, random
+
+from repast4py import core, space, schedule
 from repast4py import context as ctx
 from repast4py.parameters import create_args_parser, init_params
 from repast4py.network import write_network, read_network
 from repast4py.space import DiscretePoint
 from repast4py.space import BorderType, OccupancyType
-
-model = None
+from repast4py.random import default_rng as rng
 
 
 def generate_network_file(fname: str, n_ranks: int, n_agents: int):
@@ -38,74 +38,61 @@ class Neuron(core.Agent):
         self.alpha_synuclein_level = 200
         self.misfolding_level = 0
         self.oligomer_level = 0
-        self.lewyBodies_level = 0
+        self.lewy_bodies_level = 0
 
     def save(self):
-        """Saves the state of this agent as tuple.
-
-        A non-ghost agent will save its state using this
-        method, and any ghost agents of this agent will
-        be updated with that data (self.received_misfolding).
-
-        Returns:
-            The agent's state
-        """
-        return (
-            self.uid, self.received_misfolding, self.alpha_synuclein_level, self.misfolding_level, self.oligomer_level,
-            self.lewyBodies_level)
+        return (self.uid, self.received_misfolding,
+                self.alpha_synuclein_level, self.misfolding_level, self.oligomer_level, self.lewy_bodies_level)
 
     def update(self, neuron, alphasyn, misf, olig, lewy):
         """Updates the state of this agent when it is a ghost
         agent on some rank other than its local one.
-
-        Args:
-            data: the new agent state (received_misfolding)
         """
 
         if not self.received_misfolding and neuron:
-            # only update if the received neuron state
-            # has changed from false to true
+            # Only update if the received neuron state has changed from false to true
             if not model.contains(self):
                 model.neuron_spreaders.append(self)
             self.received_misfolding = neuron
             self.alpha_synuclein_level = alphasyn
             self.misfolding_level = misf
             self.oligomer_level = olig
-            self.lewyBodies_level = lewy
+            self.lewy_bodies_level = lewy
 
     def step(self):
-        rng = random.default_rng.uniform()
-        # fintanto che non rilevo corpi di levi continuo a creare alphasynucleina in base ad un valore randomico
-        if self.lewyBodies_level < 50:
-            self.alpha_synuclein_level += random.default_rng.integers(1, 500)
-        # vengono eliminate le alphasyn
-        if rng < 0.5 and self.alpha_synuclein_level > 1000:
-            self.alpha_synuclein_level -= random.default_rng.integers(1, 1000)
-        # con un probabilità minori rispetto all'eliminazione vado a misfoldare le proteine
-        # quando misfoldo aggiungo a misfoling level e riduco le alpha normali
-        if self.alpha_synuclein_level > 1000 and rng + self.alpha_synuclein_level / 100000 :
-            add_remove = random.default_rng.integers(1, 250)
+        random = rng.uniform()
+        # Alpha-syn is increased when there are no Lewy bodies yet
+        if self.lewy_bodies_level < 50:
+            self.alpha_synuclein_level += rng.integers(1, 500)
+        # Chance of alpha-syn reduction
+        if random < 0.5 and self.alpha_synuclein_level > 1000:
+            self.alpha_synuclein_level -= rng.integers(1, 1000)
+        # The alpha-syn misfolds with a lower probability, which increases with its concentration
+        # Misfolding increases the misfolding level and decreases normal alpha-syn
+        if self.alpha_synuclein_level > 1000 and random + self.alpha_synuclein_level / 100000:
+            add_remove = rng.integers(1, 250)
             self.misfolding_level += add_remove
             self.alpha_synuclein_level -= add_remove
 
-        # da misfolding a oligomero 
-        if self.misfolding_level > 1000 and rng < 0.05 + self.misfolding_level / 1000 + self.oligomer_level / 100 :
-            add_remove = random.default_rng.integers(0, 50)
-            self.misfolding_level -= add_remove * 10
-            self.oligomer_level += add_remove
-        # oligomer -> lewy
-        if self.oligomer_level > 500 and rng < 0.02 + self.oligomer_level / 1000 + self.lewyBodies_level / 1000 :
-            add_remove = random.default_rng.integers(0, 5)
-            self.oligomer_level -= add_remove * 10
-            self.lewyBodies_level += add_remove
+        # Formation of alpha-syn oligomers, probability is increased based on the levels
+        if (self.misfolding_level > 1000 and
+                rng.uniform() < 0.05 + self.misfolding_level / 1000 + self.oligomer_level / 1000):
+            variation = rng.integers(0, 50)
+            self.misfolding_level -= variation * 10
+            self.oligomer_level += variation
 
-        # proteasome 
+        # Formation of Lewy bodies, probability is increased based on the levels
+        if (self.oligomer_level > 500 and
+                rng.uniform() < 0.02 + self.oligomer_level / 1000 + self.lewy_bodies_level / 1000):
+            variation = rng.integers(0, 5)
+            self.oligomer_level -= variation * 10
+            self.lewy_bodies_level += variation
+
+        # Neuron internal mechanisms try to reduce the amount of bad proteins
         if self.misfolding_level > 100:
-            add_remove = random.default_rng.integers(50, 100)
-            self.misfolding_level -= add_remove
+            self.misfolding_level -= rng.integers(50, 100)
         if self.oligomer_level > 5:
-            add_remove = random.default_rng.integers(1, 5)
-            self.oligomer_level -= add_remove
+            self.oligomer_level -= rng.integers(1, 5)
 
         if self.misfolding_level < 500 and model.contains(self):
             model.neuron_spreaders.remove(self)
@@ -175,16 +162,16 @@ class Alpha(core.Agent):
     OFFSETS = 2
     RNDOFFSETS = np.array([-1, 1])
 
-    def __init__(self, a_id: int, rank: int, pt: DiscretePoint,alpha_level:int,misfoldin_level:int):
+    def __init__(self, a_id: int, rank: int, pt: DiscretePoint, alpha_level: int, misfoldin_level: int):
         super().__init__(id=a_id, type=Alpha.TYPE, rank=rank)
         self.alpha_synuclein_level = alpha_level
         self.misfolding_level = misfoldin_level
         self.pt = pt
-        self.fusion=False
+        self.fusion = False
 
     def step(self):
         grid = model.grid
-        xy_dirs = random.default_rng.choice(Alpha.RNDOFFSETS, size=2)
+        xy_dirs = rng.choice(Alpha.RNDOFFSETS, size=2)
         # model.move(self, self.pt.x + xy_dirs[0], self.pt.y + xy_dirs[1])
         self.pt = grid.get_location(self)
         nghs = model.ngh_finder.find(self.pt.x, self.pt.y)
@@ -193,14 +180,13 @@ class Alpha(core.Agent):
             at._reset_from_array(ngh)
             for obj in grid.get_agents(at):
                 if self != obj and obj.uid[1] == Neuron.TYPE:
-                    obj.misfolding_level+=self.misfolding_level
-                    obj.alpha_synuclein_level+=self.alpha_synuclein_level
+                    obj.misfolding_level += self.misfolding_level
+                    obj.alpha_synuclein_level += self.alpha_synuclein_level
                     # print("neurone",obj)
-                    self.fusion=True
-       
+                    self.fusion = True
 
     def save(self) -> Tuple:
-        return self.uid, self.fusion, self.pt.coordinates,self.alpha_synuclein_level,self.misfolding_level
+        return self.uid, self.fusion, self.pt.coordinates, self.alpha_synuclein_level, self.misfolding_level
 
 
 agent_cache = {}
@@ -212,15 +198,14 @@ def restore_agent(agent_data: Tuple):
     if uid[1] == Alpha.TYPE:
         pt_array = agent_data[2]
         pt = DiscretePoint(pt_array[0], pt_array[1], 0)
-        alpha_level=agent_data[3]
-        mis=agent_data[4]
+        alpha_level = agent_data[3]
+        mis = agent_data[4]
         if uid in agent_cache:
             alpha = agent_cache[uid]
         else:
-            alpha = Alpha(uid[0], uid[2], pt,alpha_level,mis)
+            alpha = Alpha(uid[0], uid[2], pt, alpha_level, mis)
             agent_cache[uid] = alpha
 
-        # restore the agent state from the agent_data tuple
         alpha.fusion = agent_data[1]
         alpha.pt = pt
         return alpha
@@ -229,7 +214,7 @@ def restore_agent(agent_data: Tuple):
         neuron.alpha_synuclein_level = agent_data[3]
         neuron.misfolding_level = agent_data[3]
         neuron.oligomer_level = agent_data[4]
-        neuron.lewyBodies_level = agent_data[5]
+        neuron.lewy_bodies_level = agent_data[5]
         return neuron
 
 
@@ -247,12 +232,14 @@ class NeuronCounts:
 
 
 class Model:
+
     def __init__(self, comm, params):
+        self.params = params
 
         self.comm = comm
         self.context = ctx.SharedContext(comm)
         self.rank = self.comm.Get_rank()
-        self.protein_counter=params['alpha.count']
+        self.protein_counter = params['alpha.count']
         self.runner = schedule.init_schedule_runner(comm)
         self.runner.schedule_repeating_event(1, 1, self.step)
         self.runner.schedule_stop(params['stop.at'])
@@ -264,8 +251,6 @@ class Model:
         self.net = self.context.get_projection('neuron_network')
 
         self.neuron_spreaders = []
-        self.rank = comm.Get_rank()
-        # self._seed_neuron(params['initial_neuron_count'], comm)
 
         neuroned_count = len(self.neuron_spreaders)
         self.counts = NeuronCounts(neuroned_count, neuroned_count)
@@ -282,26 +267,25 @@ class Model:
         self.ngh_finder = GridNghFinder(0, 0, box.xextent, box.yextent)
 
         world_size = comm.Get_size()
-        
+
         total_protein_count = int(params['alpha.count'] / world_size)
 
         local_bounds = self.grid.get_local_bounds()
-        rng=random.default_rng.integers(1000,5000)
+        random = rng.integers(1000, 5000)
         for i in range(total_protein_count):
-            x = int(random.default_rng.uniform(local_bounds.xmin, local_bounds.xmin + local_bounds.xextent))
-            y = int(random.default_rng.uniform(local_bounds.ymin, local_bounds.ymin + local_bounds.yextent))
+            x = int(rng.uniform(local_bounds.xmin, local_bounds.xmin + local_bounds.xextent))
+            y = int(rng.uniform(local_bounds.ymin, local_bounds.ymin + local_bounds.yextent))
             pt = DiscretePoint(x, y, 0)
-            a = Alpha(i, self.rank, pt,rng,int(rng/100))
+            a = Alpha(i, self.rank, pt, random, int(random / 100))
             self.context.add(a)
             self.grid.move(a, pt)
-        for a in self.context.agents():
-            x = int(random.default_rng.uniform(local_bounds.xmin, local_bounds.xmin + local_bounds.xextent))
-            y = int(random.default_rng.uniform(local_bounds.ymin, local_bounds.ymin + local_bounds.yextent))
-            pt = DiscretePoint(x, y, 0)
-            self.grid.move(a, pt)
+        # for a in self.context.agents():
+        #     x = int(rng.uniform(local_bounds.xmin, local_bounds.xmin + local_bounds.xextent))
+        #     y = int(rng.uniform(local_bounds.ymin, local_bounds.ymin + local_bounds.yextent))
+        #     pt = DiscretePoint(x, y, 0)
+        #     self.grid.move(a, pt)
 
-
-    def getNeighbours(self, agent):
+    def get_neighbors(self, agent):
         temp = []
         for ne in self.net.graph.nodes:
             if ne.uid[0] == agent.uid[0] and ne.uid[1] == agent.uid[1] and ne.uid[2] == agent.uid[2]:
@@ -309,18 +293,18 @@ class Model:
                     temp.append(ngh)
         return temp
 
-    def getGridAgent(self):
+    def get_grid_agents(self):
         temp = []
-        altezza = params['world.height']
-        larghezza = params['world.width']
-        for x in range(altezza):
-            for y in range(larghezza):
+        height = self.params['world.height']
+        width = self.params['world.width']
+        for x in range(height):
+            for y in range(width):
                 agent = self.grid.get_agent(DiscretePoint(x, y, 0))
                 if agent and agent not in temp:
                     temp.append(agent)
         return temp
 
-    def searchAgent(self, id, type):
+    def search_agent(self, id, type):
         if self.rank == 0:
             if self.context.agent((id, type, 0)):
                 return self.context.agent((id, type, 0))
@@ -332,42 +316,43 @@ class Model:
                 return self.context.agent((id, type, 3))
 
     def step(self):
-        self.nueronStep()
-        tick = self.runner.schedule.tick
-        fusion_cell=[]
+        self.neuron_step()
+        fusion_cell = []
         # faccio lo step degli agenti alpha e durante lo step potrebbero incontrare un agente neurone
         for a in self.context.agents(Alpha.TYPE):
             a.step()
-            if a.fusion: fusion_cell.append(a)
-        # rimuovo le alpha con stato fusion ovvero che hanno incontrato un neurone 
+            if a.fusion:
+                fusion_cell.append(a)
+
+        # rimuovo le alpha con stato fusion ovvero che hanno incontrato un neurone
         for a in fusion_cell:
             self.context.remove(a)
-        if self.runner.schedule.tick%10==0:
+        if self.runner.schedule.tick % 10 == 0:
             local_bounds = self.grid.get_local_bounds()
             for _ in range(5):
-                self.protein_counter+=1
-                x = int(random.default_rng.uniform(local_bounds.xmin, local_bounds.xmin + local_bounds.xextent))
-                y = int(random.default_rng.uniform(local_bounds.ymin, local_bounds.ymin + local_bounds.yextent))
+                self.protein_counter += 1
+                x = int(rng.uniform(local_bounds.xmin, local_bounds.xmin + local_bounds.xextent))
+                y = int(rng.uniform(local_bounds.ymin, local_bounds.ymin + local_bounds.yextent))
                 pt = DiscretePoint(x, y, 0)
-                a = Alpha(self.protein_counter, self.rank, pt,2000,50)
+                a = Alpha(self.protein_counter, self.rank, pt, 2000, 50)
                 self.context.add(a)
                 self.grid.move(a, pt)
         self.context.synchronize(restore_agent)
 
-    def nueronStep(self):
+    def neuron_step(self):
         new_neuron_spreaders = []
-        rng = random.default_rng
         for agent in self.neuron_spreaders:
             if agent.misfolding_level > 500:
                 for ngh in self.net.graph.neighbors(agent):
                     # only update agents local to this rank
                     if not ngh.received_misfolding and ngh.local_rank == self.rank:
-                        add_remove = random.default_rng.integers(0, 200)
-                        ngh.misfolding_level += add_remove
-                        agent.misfolding_level -= add_remove
+                        variation = rng.integers(0, 200)
+                        ngh.misfolding_level += variation
+                        agent.misfolding_level -= variation
                         # ngh.received_misfolding
                         if not self.contains(ngh):
                             new_neuron_spreaders.append(ngh)
+
         agent_removed = 0
         for agent in self.context.agents(Neuron.TYPE):
             agent_removed += agent.step()
@@ -389,12 +374,13 @@ class Model:
         self.alpha_oligomer = 0
         self.counts.oligomer = 0
         self.counts.alpha = 0
-        dead_cells = []
+        # dead_cells = []
         self.counts.alphaMis = 0
 
         for a in self.context.agents(Alpha.TYPE):
             if a.energy < 1:
-                dead_cells.append(a)
+                # dead_cells.append(a)
+                self.context.remove(a)
             else:
                 if a.state == 0:
                     self.counts.alpha += 1
@@ -408,15 +394,16 @@ class Model:
         self.data_set.log(tick)
 
         if self.rank == 0:
-            neuron = self.searchAgent(0, 1)
+            # neuron = self.search_agent(0, 1)
             self.alpha_logger.log_row(tick, self.alpha_protein, self.alpha_mis_protein, self.alpha_oligomer)
-            if self.searchAgent(0, 0):
-                agent = self.searchAgent(0, 0)
+
+            agent = self.search_agent(0, 0)
+            if agent:
                 self.alpha_position.log_row(tick, agent.uid, self.grid.get_location(agent).x,
                                             self.grid.get_location(agent).y, agent.state)
 
-        for a in dead_cells:
-            self.context.remove(a)
+        # for a in dead_cells:
+        # self.context.remove(a)
         folding = np.zeros(1, dtype='int64')
         misfolding = np.zeros(1, dtype='int64')
         oligomers = np.zeros(1, dtype='int64')
@@ -433,12 +420,15 @@ class Model:
         for agent in self.context.agents(Neuron.TYPE):
             print(agent, agent.alpha_synuclein_level, agent.misfolding_level, agent.oligomer_level,
                   agent.lewyBodies_level)
-        print(self.context.size([Alpha.TYPE,Neuron.TYPE]))
+        print(self.context.size([Alpha.TYPE, Neuron.TYPE]))
         # for agent in self.context.agents(Alpha.TYPE):
         #     print(agent,agent.misfolding_level,agent.alpha_synuclein_level)
 
     def start(self):
         self.runner.execute()
+
+
+model: Model
 
 
 def run(params: Dict):
