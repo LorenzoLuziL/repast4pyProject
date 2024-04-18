@@ -1,0 +1,15 @@
+random.seed: 42
+stop.at: 500.0
+alpha.count: 500
+world.width: 200
+world.height: 200
+run.number: 1
+counts_file: './output/agent_counts.csv'
+counts_diffusori: './output/agent_diff.csv'
+counts_pos: './output/agent_position.csv'
+posizioni: './output/position.csv'
+ricerca: './output/ricerca.csv'
+file_rete: 'reteGrande'
+agent_features: './output/agent_features.csv'
+initial_rumor_count: 2
+neuron_probability: 1
