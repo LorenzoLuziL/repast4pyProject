@@ -158,14 +158,17 @@ class GridNghFinder:
 
 
 class Alpha(core.Agent):
+    """Represents a set of Alpha-synuclein molecules"""
+
     TYPE = 1
     OFFSETS = 2
     RNDOFFSETS = np.array([-1, 1])
 
-    def __init__(self, a_id: int, rank: int, pt: DiscretePoint, alpha_level: int, misfoldin_level: int):
+    def __init__(self, a_id: int, rank: int, pt: DiscretePoint, alpha_level: int, misfolding_level: int):
         super().__init__(id=a_id, type=Alpha.TYPE, rank=rank)
+
         self.alpha_synuclein_level = alpha_level
-        self.misfolding_level = misfoldin_level
+        self.misfolding_level = misfolding_level
         self.pt = pt
         self.fusion = False
 
@@ -178,15 +181,52 @@ class Alpha(core.Agent):
         at = DiscretePoint(0, 0)
         for ngh in nghs:
             at._reset_from_array(ngh)
-            for obj in grid.get_agents(at):
-                if self != obj and obj.uid[1] == Neuron.TYPE:
-                    obj.misfolding_level += self.misfolding_level
-                    obj.alpha_synuclein_level += self.alpha_synuclein_level
+            for agent in grid.get_agents(at):
+                if self != agent and agent.uid[1] == Neuron.TYPE:
+                    agent.misfolding_level += self.misfolding_level
+                    agent.alpha_synuclein_level += self.alpha_synuclein_level
                     # print("neurone",obj)
                     self.fusion = True
 
     def save(self) -> Tuple:
         return self.uid, self.fusion, self.pt.coordinates, self.alpha_synuclein_level, self.misfolding_level
+
+
+class GramNegative(core.Agent):
+    TYPE = 2
+    RNDOFFSETS = np.array([-1, 1])
+
+    def __init__(self, a_id: int, rank: int, pt: DiscretePoint):
+        super().__init__(id=a_id, type=GramNegative.TYPE, rank=rank)
+        self.pt = pt
+        self.generateLPS = False
+
+    def step(self):
+        xy_dirs = rng.choice(GramNegative.RNDOFFSETS, size=2)
+        model.move_gut(self, self.pt.x + xy_dirs[0], self.pt.y + xy_dirs[1])
+        self.pt = model.gut_grid.get_location(self)
+        if rng.uniform() < 0.05:
+            self.generateLPS = True
+
+    def save(self) -> Tuple:
+        return self.uid, self.pt.coordinates
+
+
+class LPS(core.Agent):
+    TYPE = 3
+    RNDOFFSETS = np.array([-1, 1])
+
+    def __init__(self, a_id: int, rank: int, pt: DiscretePoint):
+        super().__init__(id=a_id, type=LPS.TYPE, rank=rank)
+        self.pt = pt
+
+    def step(self):
+        xy_dirs = rng.choice(LPS.RNDOFFSETS, size=2)
+        model.move_gut(self, self.pt.x + xy_dirs[0], self.pt.y + xy_dirs[1])
+        self.pt = model.gut_grid.get_location(self)
+
+    def save(self) -> Tuple:
+        return self.uid, self.pt.coordinates
 
 
 agent_cache = {}
@@ -209,6 +249,7 @@ def restore_agent(agent_data: Tuple):
         alpha.fusion = agent_data[1]
         alpha.pt = pt
         return alpha
+
     if uid[1] == Neuron.TYPE:
         neuron = Neuron(uid[0], uid[1], uid[2], agent_data[1])
         neuron.alpha_synuclein_level = agent_data[3]
@@ -216,6 +257,30 @@ def restore_agent(agent_data: Tuple):
         neuron.oligomer_level = agent_data[4]
         neuron.lewy_bodies_level = agent_data[5]
         return neuron
+
+
+def restore_agent_gut(agent_data: Tuple):
+    uid = agent_data[0]
+    if uid[1] == GramNegative.TYPE:
+        pt_array = agent_data[1]
+        pt = DiscretePoint(pt_array[0], pt_array[1], 0)
+        if uid in agent_cache:
+            cell = agent_cache[uid]
+        else:
+            cell = GramNegative(uid[0], uid[2], pt)
+            agent_cache[uid] = cell
+        cell.pt = pt
+        return cell
+    if uid[1] == LPS.TYPE:
+        pt_array = agent_data[1]
+        pt = DiscretePoint(pt_array[0], pt_array[1], 0)
+        if uid in agent_cache:
+            lps = agent_cache[uid]
+        else:
+            lps = LPS(uid[0], uid[2], pt)
+            agent_cache[uid] = lps
+        lps.pt = pt
+        return lps
 
 
 @dataclass
@@ -233,7 +298,7 @@ class NeuronCounts:
 
 class Model:
 
-    def __init__(self, comm, params):
+    def __init__(self, comm: MPI.Intracomm, params):
         self.params = params
 
         self.comm = comm
@@ -266,8 +331,11 @@ class Model:
 
         self.ngh_finder = GridNghFinder(0, 0, box.xextent, box.yextent)
 
-        world_size = comm.Get_size()
+        self.alpha_protein = 0
+        self.alpha_mis_protein = 0
+        self.alpha_oligomer = 0
 
+        world_size = comm.Get_size()
         total_protein_count = int(params['alpha.count'] / world_size)
 
         local_bounds = self.grid.get_local_bounds()
@@ -279,11 +347,35 @@ class Model:
             a = Alpha(i, self.rank, pt, random, int(random / 100))
             self.context.add(a)
             self.grid.move(a, pt)
-        # for a in self.context.agents():
-        #     x = int(rng.uniform(local_bounds.xmin, local_bounds.xmin + local_bounds.xextent))
-        #     y = int(rng.uniform(local_bounds.ymin, local_bounds.ymin + local_bounds.yextent))
-        #     pt = DiscretePoint(x, y, 0)
-        #     self.grid.move(a, pt)
+
+        for agent in self.context.agents(Neuron.TYPE):
+            x = int(rng.uniform(local_bounds.xmin, local_bounds.xmin + local_bounds.xextent))
+            y = int(rng.uniform(local_bounds.ymin, local_bounds.ymin + local_bounds.yextent))
+            pt = DiscretePoint(x, y, 0)
+            self.grid.move(agent, pt)
+
+        # GUT CONTEXT
+        self.gut_context = ctx.SharedContext(comm)
+        gut_box = space.BoundingBox(0, params['world.width'], 0, params['world.height'], 0, 0)
+        self.gut_grid = space.SharedGrid('gut_grid', bounds=gut_box, borders=BorderType.Sticky, occupancy=OccupancyType.Multiple,
+                                         buffer_size=1, comm=comm)
+        self.gut_context.add_projection(self.gut_grid)
+
+        gut_local_bounds = self.gut_grid.get_local_bounds()
+        self.lps_count = 0
+        for i in range(10):
+            x = int(rng.uniform(gut_local_bounds.xmin, gut_local_bounds.xmin + gut_local_bounds.xextent))
+            y = int(rng.uniform(gut_local_bounds.xmin, gut_local_bounds.xmin + gut_local_bounds.xextent))
+            pt = DiscretePoint(x, y, 0)
+
+            g_neg = GramNegative(i, self.rank, pt)
+            self.gut_context.add(g_neg)
+            self.gut_grid.move(g_neg, pt)
+
+            lps = LPS(i, self.rank, pt)
+            self.gut_context.add(lps)
+            self.gut_grid.move(lps, pt)
+            self.lps_count += 1
 
     def get_neighbors(self, agent):
         temp = []
@@ -318,38 +410,57 @@ class Model:
     def step(self):
         self.neuron_step()
         fusion_cell = []
-        # faccio lo step degli agenti alpha e durante lo step potrebbero incontrare un agente neurone
+        # Alpha agents step, they are added to the list if they encountered a neuron
         for a in self.context.agents(Alpha.TYPE):
             a.step()
             if a.fusion:
                 fusion_cell.append(a)
 
-        # rimuovo le alpha con stato fusion ovvero che hanno incontrato un neurone
+        # Remove Alpha agents that encountered a neuron
         for a in fusion_cell:
             self.context.remove(a)
-        if self.runner.schedule.tick % 10 == 0:
+
+        if self.runner.schedule.tick % 100 == 0:
             local_bounds = self.grid.get_local_bounds()
-            for _ in range(5):
+            for _ in range(10):
                 self.protein_counter += 1
                 x = int(rng.uniform(local_bounds.xmin, local_bounds.xmin + local_bounds.xextent))
                 y = int(rng.uniform(local_bounds.ymin, local_bounds.ymin + local_bounds.yextent))
                 pt = DiscretePoint(x, y, 0)
-                a = Alpha(self.protein_counter, self.rank, pt, 2000, 50)
+                a = Alpha(self.protein_counter, self.rank, pt, 2000, 1)
                 self.context.add(a)
                 self.grid.move(a, pt)
         self.context.synchronize(restore_agent)
+
+        # GUT STEPS
+        for g_neg in self.gut_context.agents(GramNegative.TYPE):
+            g_neg.step()
+
+            if g_neg.generateLPS:
+                pt = DiscretePoint(g_neg.pt.x, g_neg.pt.y, 0)
+                lps = LPS(self.lps_count, self.rank, pt)
+                self.gut_context.add(lps)
+                self.gut_grid.move(lps, pt)
+                self.lps_count += 1
+
+                g_neg.generateLPS = False
+
+        self.gut_context.synchronize(restore_agent_gut)
+        for lps in self.gut_context.agents(LPS.TYPE):
+            lps.step()
+
+        self.gut_context.synchronize(restore_agent_gut)
 
     def neuron_step(self):
         new_neuron_spreaders = []
         for agent in self.neuron_spreaders:
             if agent.misfolding_level > 500:
                 for ngh in self.net.graph.neighbors(agent):
-                    # only update agents local to this rank
+                    # Only update agents local to this rank
                     if not ngh.received_misfolding and ngh.local_rank == self.rank:
                         variation = rng.integers(0, 200)
                         ngh.misfolding_level += variation
                         agent.misfolding_level -= variation
-                        # ngh.received_misfolding
                         if not self.contains(ngh):
                             new_neuron_spreaders.append(ngh)
 
@@ -367,19 +478,14 @@ class Model:
                 return True
         return False
 
-    def log_counts(self, tick):
+    def log_counts(self):
         # Get the current number of zombies and humans and log
-        self.alpha_protein = 0
-        self.alpha_mis_protein = 0
-        self.alpha_oligomer = 0
         self.counts.oligomer = 0
         self.counts.alpha = 0
-        # dead_cells = []
         self.counts.alphaMis = 0
 
         for a in self.context.agents(Alpha.TYPE):
             if a.energy < 1:
-                # dead_cells.append(a)
                 self.context.remove(a)
             else:
                 if a.state == 0:
@@ -391,19 +497,17 @@ class Model:
                 if a.state == 2:
                     self.alpha_oligomer += 1
                     self.counts.oligomer += 1
-        self.data_set.log(tick)
+        # self.data_set.log(tick)
+        #
+        # if self.rank == 0:
+        #     # neuron = self.search_agent(0, 1)
+        #     self.alpha_logger.log_row(tick, self.alpha_protein, self.alpha_mis_protein, self.alpha_oligomer)
+        #
+        #     agent = self.search_agent(0, 0)
+        #     if agent:
+        #         self.alpha_position.log_row(tick, agent.uid, self.grid.get_location(agent).x,
+        #                                     self.grid.get_location(agent).y, agent.state)
 
-        if self.rank == 0:
-            # neuron = self.search_agent(0, 1)
-            self.alpha_logger.log_row(tick, self.alpha_protein, self.alpha_mis_protein, self.alpha_oligomer)
-
-            agent = self.search_agent(0, 0)
-            if agent:
-                self.alpha_position.log_row(tick, agent.uid, self.grid.get_location(agent).x,
-                                            self.grid.get_location(agent).y, agent.state)
-
-        # for a in dead_cells:
-        # self.context.remove(a)
         folding = np.zeros(1, dtype='int64')
         misfolding = np.zeros(1, dtype='int64')
         oligomers = np.zeros(1, dtype='int64')
@@ -415,11 +519,16 @@ class Model:
         agent.pt = DiscretePoint(x, y, 0)
         self.grid.move(agent, DiscretePoint(int(math.floor(x)), int(math.floor(y))))
 
+    def move_gut(self, agent, x, y):
+        agent.pt = DiscretePoint(x, y, 0)
+        self.gut_grid.move(agent, DiscretePoint(int(math.floor(x)), int(math.floor(y))))
+
     def at_end(self):
-        # self.data_set.close()
-        for agent in self.context.agents(Neuron.TYPE):
-            print(agent, agent.alpha_synuclein_level, agent.misfolding_level, agent.oligomer_level,
-                  agent.lewyBodies_level)
+        # for agent in self.context.agents(Neuron.TYPE):
+        #     print(agent, agent.alpha_synuclein_level, agent.misfolding_level, agent.oligomer_level,
+        #           agent.lewyBodies_level)
+        # print(self.context.size([Alpha.TYPE, Neuron.TYPE]))
+        print(self.gut_context.size([LPS.TYPE]))
         print(self.context.size([Alpha.TYPE, Neuron.TYPE]))
         # for agent in self.context.agents(Alpha.TYPE):
         #     print(agent,agent.misfolding_level,agent.alpha_synuclein_level)
