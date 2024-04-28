@@ -35,7 +35,7 @@ class Neuron(core.Agent):
         self.received_misfolding = received_misfolding
         self.state = 0
         self.counter = 0
-        self.alpha_synuclein_level = 200
+        self.alpha_synuclein_level = 0
         self.misfolding_level = 0
         self.oligomer_level = 0
         self.lewy_bodies_level = 0
@@ -200,6 +200,7 @@ class GramNegative(core.Agent):
         super().__init__(id=a_id, type=GramNegative.TYPE, rank=rank)
         self.pt = pt
         self.generateLPS = False
+        self.remove=False
 
     def step(self):
         xy_dirs = rng.choice(GramNegative.RNDOFFSETS, size=2)
@@ -219,6 +220,7 @@ class LPS(core.Agent):
     def __init__(self, a_id: int, rank: int, pt: DiscretePoint):
         super().__init__(id=a_id, type=LPS.TYPE, rank=rank)
         self.pt = pt
+        self.remove=False
 
     def step(self):
         xy_dirs = rng.choice(LPS.RNDOFFSETS, size=2)
@@ -228,6 +230,31 @@ class LPS(core.Agent):
     def save(self) -> Tuple:
         return self.uid, self.pt.coordinates
 
+
+class Bifidobacteria(core.Agent):
+
+    TYPE=4
+    RNDOFFSETS = np.array([-1, 1])
+
+    def __init__(self,a_id:int,rank:int,pt:DiscretePoint):
+        super().__init__(id=a_id,type=Bifidobacteria.TYPE,rank=rank)
+        self.pt=pt
+
+    def step(self):
+        grid=model.gut_grid
+        xy_dirs=rng.choice(LPS.RNDOFFSETS,size=2)
+        model.move_gut(self, self.pt.x + xy_dirs[0], self.pt.y + xy_dirs[1])
+        self.pt=grid.get_location(self)
+        nghs = model.ngh_finder.find(self.pt.x, self.pt.y)
+        at = DiscretePoint(0, 0, 0)
+        for ngh in nghs:
+            at._reset_from_array(ngh)
+            for obj in grid.get_agents(at):
+                if self != obj and (obj.uid[1] == LPS.TYPE or obj.uid[1] == GramNegative.TYPE):
+                    obj.remove=True
+
+    def save(self)->Tuple:
+        return self.uid,self.pt.coordinates
 
 agent_cache = {}
 
@@ -281,6 +308,16 @@ def restore_agent_gut(agent_data: Tuple):
             agent_cache[uid] = lps
         lps.pt = pt
         return lps
+    if uid[1]==Bifidobacteria.TYPE:
+        pt_array=agent_data[1]
+        pt=DiscretePoint(pt_array[0],pt_array[1],0)
+        if uid in agent_cache:
+            bifido=agent_cache[uid]
+        else:
+            bifido=Bifidobacteria(uid[0],uid[2],pt)
+            agent_cache[uid]=bifido
+        bifido.pt=pt
+        return bifido
 
 
 @dataclass
@@ -363,7 +400,8 @@ class Model:
 
         gut_local_bounds = self.gut_grid.get_local_bounds()
         self.lps_count = 0
-        for i in range(10):
+        #Generate Gram negative
+        for i in range(5):
             x = int(rng.uniform(gut_local_bounds.xmin, gut_local_bounds.xmin + gut_local_bounds.xextent))
             y = int(rng.uniform(gut_local_bounds.xmin, gut_local_bounds.xmin + gut_local_bounds.xextent))
             pt = DiscretePoint(x, y, 0)
@@ -372,10 +410,17 @@ class Model:
             self.gut_context.add(g_neg)
             self.gut_grid.move(g_neg, pt)
 
-            lps = LPS(i, self.rank, pt)
-            self.gut_context.add(lps)
-            self.gut_grid.move(lps, pt)
-            self.lps_count += 1
+        #Generate Bifidobacteria
+        for i in range(5):
+            x=int(rng.uniform(gut_local_bounds.xmin,gut_local_bounds.xmin+gut_local_bounds.xextent))
+            y=int(rng.uniform(gut_local_bounds.xmin,gut_local_bounds.xmin+gut_local_bounds.xextent))
+            pt=DiscretePoint(x,y,0)
+
+            bifido=Bifidobacteria(i,self.rank,pt)
+            self.gut_context.add(bifido)
+            self.gut_grid.move(bifido,pt)
+        self.gram_count=self.gut_context.size([GramNegative.TYPE])[2]
+        self.bifido_count=self.gut_context.size([Bifidobacteria.TYPE])[4]
 
     def get_neighbors(self, agent):
         temp = []
@@ -431,25 +476,65 @@ class Model:
                 self.context.add(a)
                 self.grid.move(a, pt)
         self.context.synchronize(restore_agent)
-
+        self.gut_step()
+    
         # GUT STEPS
+    def gut_step(self):
+        if self.runner.schedule.tick % 10 == 0:
+            self.generate_agents()
+        remove_agents=[]
+        for b in self.gut_context.agents(Bifidobacteria.TYPE):
+            b.step()
+
+        try:
+            self.gut_context.agents(LPS.TYPE)
+            for l in self.gut_context.agents(LPS.TYPE):
+                if l.remove:
+                    remove_agents.append(l)
+                else:
+                  l.step()
+        except:
+            print("---")
+
         for g_neg in self.gut_context.agents(GramNegative.TYPE):
-            g_neg.step()
+            if g_neg.remove:
+                remove_agents.append(g_neg)
+            else:    
+                g_neg.step()
 
+        for agent in remove_agents:
+            self.gut_context.remove(agent)
+
+        for g_neg in self.gut_context.agents(GramNegative.TYPE):
             if g_neg.generateLPS:
-                pt = DiscretePoint(g_neg.pt.x, g_neg.pt.y, 0)
-                lps = LPS(self.lps_count, self.rank, pt)
-                self.gut_context.add(lps)
-                self.gut_grid.move(lps, pt)
-                self.lps_count += 1
-
-                g_neg.generateLPS = False
+                self.lps_count+=1
+                cell=LPS(self.lps_count,self.rank,g_neg.pt)
+                self.gut_context.add(cell)
+                self.gut_grid.move(cell,g_neg.pt)
+                g_neg.generateLPS=False
 
         self.gut_context.synchronize(restore_agent_gut)
-        for lps in self.gut_context.agents(LPS.TYPE):
-            lps.step()
 
-        self.gut_context.synchronize(restore_agent_gut)
+    def generate_agents(self):
+        local_bounds_gut = self.gut_grid.get_local_bounds()
+        # Genero le gram negative #
+        for _ in range(5):
+            x=int(rng.uniform(local_bounds_gut.xmin,local_bounds_gut.xmin+local_bounds_gut.xextent))
+            y=int(rng.uniform(local_bounds_gut.xmin,local_bounds_gut.xmin+local_bounds_gut.xextent))
+            pt=DiscretePoint(x,y,0)
+            self.gram_count+=1
+            cell=GramNegative(self.gram_count,self.rank,pt)
+            self.gut_context.add(cell)
+            self.gut_grid.move(cell,pt)
+        # Genero le Bifidobacteria #
+        for _ in range(5):
+            x=int(rng.uniform(local_bounds_gut.xmin,local_bounds_gut.xmin+local_bounds_gut.xextent))
+            y=int(rng.uniform(local_bounds_gut.xmin,local_bounds_gut.xmin+local_bounds_gut.xextent))
+            pt=DiscretePoint(x,y,0)
+            self.bifido_count+=1
+            lps=Bifidobacteria(self.bifido_count,self.rank,pt)
+            self.gut_context.add(lps)
+            self.gut_grid.move(lps,pt)
 
     def neuron_step(self):
         new_neuron_spreaders = []
@@ -528,7 +613,9 @@ class Model:
         #     print(agent, agent.alpha_synuclein_level, agent.misfolding_level, agent.oligomer_level,
         #           agent.lewyBodies_level)
         # print(self.context.size([Alpha.TYPE, Neuron.TYPE]))
-        print(self.gut_context.size([LPS.TYPE]))
+        print("lps",self.gut_context.size([LPS.TYPE])[3])
+        print("GramNegative",self.gut_context.size([GramNegative.TYPE])[2])
+        print("bifido",self.gut_context.size([Bifidobacteria.TYPE])[4])
         print(self.context.size([Alpha.TYPE, Neuron.TYPE]))
         # for agent in self.context.agents(Alpha.TYPE):
         #     print(agent,agent.misfolding_level,agent.alpha_synuclein_level)
