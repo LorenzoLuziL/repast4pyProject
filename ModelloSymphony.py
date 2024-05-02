@@ -69,7 +69,7 @@ class Neuron(core.Agent):
             self.alpha_synuclein_level -= rng.integers(1, 1000)
         # The alpha-syn misfolds with a lower probability, which increases with its concentration
         # Misfolding increases the misfolding level and decreases normal alpha-syn
-        if self.alpha_synuclein_level > 1000 and random + self.alpha_synuclein_level / 100000:
+        if self.alpha_synuclein_level > 1000 and random < 0.3 + self.alpha_synuclein_level / 100000:
             add_remove = rng.integers(1, 250)
             self.misfolding_level += add_remove
             self.alpha_synuclein_level -= add_remove
@@ -555,7 +555,7 @@ class Model:
                 x = int(rng.uniform(local_bounds.xmin, local_bounds.xmin + local_bounds.xextent))
                 y = int(rng.uniform(local_bounds.ymin, local_bounds.ymin + local_bounds.yextent))
                 pt = DiscretePoint(x, y, 0)
-                a = Alpha(self.protein_counter, self.rank, pt, 2000, 1)
+                a = Alpha(self.protein_counter, self.rank, pt, 2000, 10)
                 self.context.add(a)
                 self.grid.move(a, pt)
 
@@ -637,12 +637,13 @@ class Model:
         for alpha in spread_alpha:
             self.gut_context.remove(alpha)
             self.passedProteins+=1
-            x = int(rng.uniform(local_bounds.xmin, local_bounds.xmin + local_bounds.xextent))
-            y = int(rng.uniform(local_bounds.ymin, local_bounds.ymin + local_bounds.yextent))
-            pt = DiscretePoint(x, y, 0)
-            alpha.in_CNS = True
-            self.context.add(alpha)
-            self.grid.move(alpha, pt)
+            if params['flag_sposta']:
+                x = int(rng.uniform(local_bounds.xmin, local_bounds.xmin + local_bounds.xextent))
+                y = int(rng.uniform(local_bounds.ymin, local_bounds.ymin + local_bounds.yextent))
+                pt = DiscretePoint(x, y, 0)
+                alpha.in_CNS = True
+                self.context.add(alpha)
+                self.grid.move(alpha, pt)
 
         self.context.synchronize(restore_agent)
         self.gut_context.synchronize(restore_agent_gut)
@@ -660,7 +661,7 @@ class Model:
         # Generate Gram-negative
         for _ in range(5):
             x = int(rng.uniform(local_bounds_gut.xmin, local_bounds_gut.xmin + local_bounds_gut.xextent))
-            y = int(rng.uniform(local_bounds_gut.xmin, local_bounds_gut.xmin + local_bounds_gut.xextent))
+            y = int(rng.uniform(local_bounds_gut.ymin, local_bounds_gut.ymin + local_bounds_gut.yextent))
             pt = DiscretePoint(x, y, 0)
             self.gram_count += 1
             cell = GramNegative(self.gram_count, self.rank, pt)
@@ -670,7 +671,7 @@ class Model:
         # Generate Bifidobacteria
         for _ in range(5):
             x = int(rng.uniform(local_bounds_gut.xmin, local_bounds_gut.xmin + local_bounds_gut.xextent))
-            y = int(rng.uniform(local_bounds_gut.xmin, local_bounds_gut.xmin + local_bounds_gut.xextent))
+            y = int(rng.uniform(local_bounds_gut.ymin, local_bounds_gut.ymin + local_bounds_gut.yextent))
             pt = DiscretePoint(x, y, 0)
             self.bifido_count += 1
             bifido = Bifidobacteria(self.bifido_count, self.rank, pt)
