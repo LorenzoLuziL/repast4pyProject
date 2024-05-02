@@ -17,6 +17,9 @@ from repast4py.space import DiscretePoint
 from repast4py.space import BorderType, OccupancyType
 from repast4py.random import default_rng as rng
 
+import os
+os.environ['KMP_DUPLICATE_LIB_OK'] = 'True'
+
 
 def generate_network_file(fname: str, n_ranks: int, n_agents: int):
     g = nx.connected_watts_strogatz_graph(n_agents, 2, 0.25)
@@ -193,7 +196,6 @@ class Alpha(core.Agent):
                 if self != agent and agent.uid[1] == Neuron.TYPE:
                     agent.misfolding_level += self.misfolding_level
                     agent.alpha_synuclein_level += self.alpha_synuclein_level
-                    # print("neurone",obj)
                     self.fusion = True
 
         if self.energy > 0:
@@ -479,7 +481,7 @@ class Model:
         # self.gram_count = 0
         # self.bifido_count = 0
         # self.generate_gut_agents()
-        self.passedProteins=0
+        self.passedProteins = 0
         # Generate Gut neurons
         for i in range(20):
             x = int(rng.uniform(gut_local_bounds.xmin, gut_local_bounds.xmin + gut_local_bounds.xextent))
@@ -539,7 +541,6 @@ class Model:
         fusion_cell = []
         # Alpha agents step, they are added to the list if they encountered a neuron
         for a in self.context.agents(Alpha.TYPE):
-            bad_alpha = a
             a.step()
             if a.fusion:
                 fusion_cell.append(a)
@@ -636,7 +637,7 @@ class Model:
         local_bounds = self.grid.get_local_bounds()
         for alpha in spread_alpha:
             self.gut_context.remove(alpha)
-            self.passedProteins+=1
+            self.passedProteins += 1
             if params['flag_sposta']:
                 x = int(rng.uniform(local_bounds.xmin, local_bounds.xmin + local_bounds.xextent))
                 y = int(rng.uniform(local_bounds.ymin, local_bounds.ymin + local_bounds.yextent))
@@ -746,7 +747,7 @@ class Model:
         # print(self.context.size([Alpha.TYPE, Neuron.TYPE]))
         print("GUT", self.gut_context.size([LPS.TYPE, GramNegative.TYPE, Bifidobacteria.TYPE, Alpha.TYPE, GutNeuron.TYPE]))
         print("CNS", self.context.size([Alpha.TYPE, Neuron.TYPE]))
-        print("proteine passate",self.passedProteins)
+        print("proteine passate", self.passedProteins)
         # for agent in self.context.agents(Alpha.TYPE):
         #     print(agent,agent.misfolding_level,agent.alpha_synuclein_level)
 
