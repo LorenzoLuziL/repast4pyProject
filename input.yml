@@ -1,5 +1,5 @@
 random.seed: 42
-stop.at: 5000
+stop.at: 1000
 alpha.count: 400
 world.width: 200
 world.height: 200
@@ -13,3 +13,12 @@ file_rete: 'reteGrande'
 agent_features: './output/agent_features.csv'
 initial_rumor_count: 2
 neuron_probability: 1
+dysboisi_probability: 45
+release_probability: 25
+flag_sposta: True
+attiva_CNS: True
+attiva_gut: True
+gut_neuron: 20
+gram_negative: 10
+bifidobacteria: 10
+lps_release: 20
