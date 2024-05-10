@@ -17,14 +17,14 @@ misfolding_pb: 0
 oligomers_pb: 0
 lewy_bodies_pb: 0
 neuron_probability: 1
-dysboisi_probability: 50
-release_probability: 25
+dysboisi_probability: 10
+release_probability: 1
 flag_sposta: True
 attiva_CNS: True
 attiva_gut: True
 gut_neuron: 20
 gram_negative: 10
-bifidobacteria: 50
+bifidobacteria: 10
 lps_release: 20
 folding_in_gut: 1500
 oligomers_in_gut: 10
