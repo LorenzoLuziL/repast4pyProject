@@ -437,9 +437,7 @@ class Model:
 
         self.neuron_spreaders = []
        
-        # loggers = logging.create_loggers(self.counts, op=MPI.SUM, rank=self.rank)
-        # self.data_set = logging.ReducingDataSet(loggers, comm, params['counts_file'])
-        # self.data_set.log(0)
+        
         
         self.neuron_prob = params['neuron_probability']
 
@@ -488,9 +486,7 @@ class Model:
 
         gut_local_bounds = self.gut_grid.get_local_bounds()
         self.lps_count = 0
-        # self.gram_count = 0
-        # self.bifido_count = 0
-        # self.generate_gut_agents()
+       
         self.passedProteins=0
         # Generate Gut neurons
         for i in range(params['gut_neuron']):
@@ -536,9 +532,7 @@ class Model:
         self.gram_count = self.gut_context.size([GramNegative.TYPE])[2]
         self.bifido_count = self.gut_context.size([Bifidobacteria.TYPE])[4]
         self.gut_alpha_count = 0
-         # loggers = logging.create_loggers(self.counts, op=MPI.SUM, rank=self.rank)
-        # self.data_set = logging.ReducingDataSet(loggers, comm, params['counts_file'])
-        # self.data_set.log(0)
+        
         self.counts = AgentCount(self.context.size([Alpha.TYPE])[1],params['bifidobacteria'],0,0,params['gram_negative'])
         loggers=logging.create_loggers(self.counts,op=MPI.SUM, rank=self.rank)
         self.data_set=logging.ReducingDataSet(loggers,comm,params['counts_file'])
@@ -619,7 +613,7 @@ class Model:
         for agent in self.context.agents(Alpha.TYPE):
             self.agent_cns_pos.log_row(self.runner.schedule.tick,agent.TYPE,self.grid.get_location(agent).x,self.grid.get_location(agent).y,0)
         self.agent_cns_pos.write()
-        # self.bifido_pos.write()
+
 
     def neuron_step(self):
         new_neuron_spreaders = []
@@ -634,13 +628,9 @@ class Model:
                         if not self.contains(ngh):
                             new_neuron_spreaders.append(ngh)
 
-        agents_removed = 0
         for agent in self.context.agents(Neuron.TYPE):
             agent.step()
-        # self.neuron_spreaders += new_neuron_spreaders
-        # self.counts.new_neuron_spreaders = len(new_neuron_spreaders)
-        # self.counts.total_neuron_spreaders += self.counts.new_neuron_spreaders + agents_removed
-        # self.data_set.log(self.runner.schedule.tick)
+        
 
     def gut_step(self):
         if self.runner.schedule.tick % 10 == 0:
@@ -773,16 +763,6 @@ class Model:
                 if a.state == 2:
                     self.alpha_oligomer += 1
                     self.counts.oligomer += 1
-        # self.data_set.log(tick)
-        #
-        # if self.rank == 0:
-        #     # neuron = self.search_agent(0, 1)
-        #     self.alpha_logger.log_row(tick, self.alpha_protein, self.alpha_mis_protein, self.alpha_oligomer)
-        #
-        #     agent = self.search_agent(0, 0)
-        #     if agent:
-        #         self.alpha_position.log_row(tick, agent.uid, self.grid.get_location(agent).x,
-        #                                     self.grid.get_location(agent).y, agent.state)
 
         folding = np.zeros(1, dtype='int64')
         misfolding = np.zeros(1, dtype='int64')
