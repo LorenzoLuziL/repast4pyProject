@@ -729,7 +729,7 @@ class Model:
             self.gut_grid.move(bifido, pt)
 
         # Generate Alpha
-        for _ in range((1 + int(self.lps_count / 500))):
+        for _ in range((1 + int(self.lps_count / params['alpha_gut']))):
             x = int(rng.uniform(local_bounds_gut.xmin, local_bounds_gut.xmin + local_bounds_gut.xextent))
             y = int(rng.uniform(local_bounds_gut.ymin, local_bounds_gut.ymin + local_bounds_gut.yextent))
             pt = DiscretePoint(x, y, 0)
