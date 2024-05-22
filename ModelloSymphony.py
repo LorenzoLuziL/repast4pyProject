@@ -4,12 +4,13 @@ from typing import Dict, Tuple
 from mpi4py import MPI
 from dataclasses import dataclass
 
+
 import numba
 from numba import int32, int64
 from numba.experimental import jitclass
 import networkx as nx
 
-from repast4py import core, space, schedule, logging
+from repast4py import core, space, schedule,logging
 from repast4py import context as ctx
 from repast4py.parameters import create_args_parser, init_params
 from repast4py.network import write_network, read_network
@@ -64,29 +65,29 @@ class Neuron(core.Agent):
         # Alpha-syn is increased when there are no Lewy bodies yet
         if self.lewy_bodies_level < 50:
             self.alpha_synuclein_level += rng.integers(1, 500)
+        if self.lewy_bodies_level>50:
+            self.alpha_synuclein_level+=500
+            self.misfolding_level+=250
         # Chance of alpha-syn reduction
         if random < 0.5 and self.alpha_synuclein_level > 1000:
             self.alpha_synuclein_level -= rng.integers(1, 1000)
         # The alpha-syn misfolds with a lower probability, which increases with its concentration
         # Misfolding increases the misfolding level and decreases normal alpha-syn
-        if (self.alpha_synuclein_level > 1000 and random < 0.3 + self.alpha_synuclein_level / 100000 +
-                self.oligomer_level / 1000 + self.lewy_bodies_level / 100 + params['misfolding_pb'] / 1000):
+        if self.alpha_synuclein_level > 1000 and random < 0.3 + self.alpha_synuclein_level / 100000 + self.oligomer_level / 1000 + self.lewy_bodies_level/100 + params['misfolding_pb']/1000:
             add_remove = rng.integers(1, 250)
             self.misfolding_level += add_remove
             self.alpha_synuclein_level -= add_remove
 
         # Formation of alpha-syn oligomers, probability is increased based on the levels
         if (self.misfolding_level > 1000 and
-                rng.uniform() < 0.05 + self.misfolding_level / 1000 + self.oligomer_level / 1000 +
-                self.lewy_bodies_level / 100 + params['oligomers_pb'] / 1000):
+                rng.uniform() < 0.05 + self.misfolding_level / 1000 + self.oligomer_level / 1000 + self.lewy_bodies_level/100 + params['oligomers_pb']/1000):
             variation = rng.integers(0, 50)
             self.misfolding_level -= variation * 10
             self.oligomer_level += variation
 
         # Formation of Lewy bodies, probability is increased based on the levels
         if (self.oligomer_level > 300 and
-                rng.uniform() < 0.02 + self.oligomer_level / 1000 + self.lewy_bodies_level / 1000 +
-                params['lewy_bodies_pb'] / 1000):
+                rng.uniform() < 0.02 + self.oligomer_level / 1000 + self.lewy_bodies_level / 1000 +params['lewy_bodies_pb']/1000):
             variation = rng.integers(0, 5)
             self.oligomer_level -= variation * 10
             self.lewy_bodies_level += variation
@@ -94,7 +95,7 @@ class Neuron(core.Agent):
         # Neuron internal mechanisms try to reduce the amount of bad proteins
         if self.misfolding_level > 100:
             self.misfolding_level -= rng.integers(50, 100)
-        if self.oligomer_level > 5:
+        if self.oligomer_level > 10:
             self.oligomer_level -= rng.integers(1, 5)
 
         if self.misfolding_level < 500 and model.contains(self):
@@ -106,12 +107,12 @@ class Neuron(core.Agent):
             model.neuron_spreaders.append(self)
             # model.counts.new_neuron_spreaders += 1
             return 1
-        if self.misfolding_level > 500:
-            self.state = 1
-            if self.oligomer_level > 150:
-                self.state = 2
-                if self.lewy_bodies_level > 50:
-                    self.state = 3
+        if self.misfolding_level>500:
+            self.state=1
+            if self.oligomer_level>150:
+                self.state=2
+                if self.lewy_bodies_level>50:
+                    self.state=3
         return 0
 
 
@@ -121,11 +122,18 @@ def create_neuron_agent(nid, agent_type, rank, **kwargs):
 
 @dataclass
 class AgentCount:
-    alpha_count: int = 0
-    bifido_count: int = 0
-    alpha_gut_count: int = 0
-    LPS_count: int = 0
-    gram_negative_count: int = 0
+    alpha_count:int=0
+    bifido_count:int=0
+    alpha_gut_count:int=0
+    LPS_count:int=0
+    gram_negative_count:int=0
+
+@dataclass 
+class NeuronStateCount:
+    balanced_state:int=0
+    misfolding_state:int=0
+    oligomer_state:int=0
+    lewy_bodies_state:int=0
 
 
 @numba.jit((int64[:], int64[:]), nopython=True)
@@ -187,6 +195,7 @@ class Alpha(core.Agent):
         self.energy = 1000
         self.is_alive = True
         self.in_CNS = True
+        self.came_from_gut=False
 
     def step(self):
         grid = model.grid if self.in_CNS else model.gut_grid
@@ -205,13 +214,14 @@ class Alpha(core.Agent):
                 if self != agent and agent.uid[1] == Neuron.TYPE:
                     agent.misfolding_level += self.misfolding_level
                     agent.alpha_synuclein_level += self.alpha_synuclein_level
+                    # print("neurone",obj)
                     self.fusion = True
 
-        if self.energy < 0:
+        if self.energy<0 :
             self.is_alive = False
         if model.runner.schedule.tick % params['tick_life_alpha']:
             if self.energy > 0:
-                self.energy -= rng.uniform()
+                self.energy-=rng.uniform()
 
     def save(self) -> Tuple:
         return self.uid, self.fusion, self.pt.coordinates, self.alpha_synuclein_level, self.misfolding_level, self.energy
@@ -232,8 +242,7 @@ class GramNegative(core.Agent):
         xy_dirs = rng.choice(GramNegative.RNDOFFSETS, size=2)
         model.move_gut(self, self.pt.x + xy_dirs[0], self.pt.y + xy_dirs[1])
         self.pt = model.gut_grid.get_location(self)
-        if (rng.uniform() < 0.06 + model.lps_count / 100000 +
-                params['dysboisi_probability'] / 100 + model.runner.schedule.tick / 10000):
+        if rng.uniform() < 0.06 + model.lps_count / 100000 + params['dysboisi_probability'] / 100+ model.runner.schedule.tick / 10000:
             self.generateLPS = True
 
         death_pb = rng.uniform()
@@ -438,6 +447,10 @@ class Model:
         self.runner.schedule_end_event(self.at_end)
 
         self.neuron_spreaders = []
+       
+        
+        
+
 
         # ================ CNS CONTEXT ================
         self.context = ctx.SharedContext(comm)
@@ -484,8 +497,8 @@ class Model:
 
         gut_local_bounds = self.gut_grid.get_local_bounds()
         self.lps_count = 0
-
-        self.passed_proteins = 0
+       
+        self.passedProteins=0
         # Generate Gut neurons
         for i in range(params['gut_neuron']):
             x = int(rng.uniform(gut_local_bounds.xmin, gut_local_bounds.xmin + gut_local_bounds.xextent))
@@ -517,13 +530,12 @@ class Model:
             self.gut_grid.move(bifido, pt)
 
         # Generate Alpha
-        for _ in range(10):
+        for _ in range(params['alpha_gut']):
             x = int(rng.uniform(gut_local_bounds.xmin, gut_local_bounds.xmin + gut_local_bounds.xextent))
             y = int(rng.uniform(gut_local_bounds.ymin, gut_local_bounds.ymin + gut_local_bounds.yextent))
             pt = DiscretePoint(x, y, 0)
             self.protein_counter += 1
-            alpha = Alpha(self.protein_counter, self.rank, pt, params['starting_folding_level'],
-                          params['starting_oligomer_level'])
+            alpha = Alpha(self.protein_counter, self.rank, pt, params['starting_folding_level'], params['starting_oligomer_level'])
             alpha.in_CNS = False
             self.gut_context.add(alpha)
             self.gut_grid.move(alpha, pt)
@@ -531,17 +543,16 @@ class Model:
         self.gram_count = self.gut_context.size([GramNegative.TYPE])[2]
         self.bifido_count = self.gut_context.size([Bifidobacteria.TYPE])[4]
         self.gut_alpha_count = 0
-
-        self.counts = AgentCount(self.context.size([Alpha.TYPE])[1], params['bifidobacteria'], 0, 0,
-                                 params['gram_negative'])
-        loggers = logging.create_loggers(self.counts, op=MPI.SUM, rank=self.rank)
-        self.data_set = logging.ReducingDataSet(loggers, comm, params['counts_file'])
+        
+        self.counts = AgentCount(self.context.size([Alpha.TYPE])[1],params['bifidobacteria'],0,0,params['gram_negative'])
+        loggers=logging.create_loggers(self.counts,op=MPI.SUM, rank=self.rank)
+        self.data_set=logging.ReducingDataSet(loggers,comm,params['counts_file'])
         self.data_set.log(0)
 
+        self.neuron_counter= logging.TabularLogger(comm,params['nueron_state'],['tick','balanced','misfolding','oligomer','lewy_bodies'])
         # initialize the logging
         self.agent_gut_pos = logging.TabularLogger(comm, params['agent_pos_gut'], ['tick', 'agent_id', 'x', 'y'])
-        self.agent_cns_pos = logging.TabularLogger(comm, params['agent_pos_cns'],
-                                                   ['tick', 'agent_id', 'x', 'y', 'neuron_state'])
+        self.agent_cns_pos = logging.TabularLogger(comm, params['agent_pos_cns'], ['tick', 'agent_id', 'x', 'y','neuron_state','came_from_gut'])
 
     def get_neighbors(self, agent):
         temp = []
@@ -555,74 +566,93 @@ class Model:
         if params['attiva_CNS']:
             self.neuron_step()
 
+            self.log_nueron()
             fusion_cell = []
-            # Alpha agents step, they are added to the list if they encountered a neuron
+            remove_cell=[]
+        # Alpha agents step, they are added to the list if they encountered a neuron
             for a in self.context.agents(Alpha.TYPE):
+                bad_alpha = a
                 a.step()
                 if a.fusion or not a.is_alive:
                     fusion_cell.append(a)
+               
 
-            # Remove Alpha agents that encountered a neuron
+        # Remove Alpha agents that encountered a neuron
             for a in fusion_cell:
                 self.context.remove(a)
-
+         
+        #Generate Alpha in CNS 
             if self.runner.schedule.tick % params['alpha_generation_CNS'] == 0:
                 local_bounds = self.grid.get_local_bounds()
-                for _ in range(10):
+                for _ in range(params['alpha_cns']):
                     self.protein_counter += 1
                     x = int(rng.uniform(local_bounds.xmin, local_bounds.xmin + local_bounds.xextent))
                     y = int(rng.uniform(local_bounds.ymin, local_bounds.ymin + local_bounds.yextent))
                     pt = DiscretePoint(x, y, 0)
-                    a = Alpha(self.protein_counter, self.rank, pt, params['folding_level_generation_alpha'],
-                              params['misfolding_level_generation_alpha'])
+                    a = Alpha(self.protein_counter, self.rank, pt, params['folding_level_generation_alpha'], params['misfolding_level_generation_alpha'])
                     self.context.add(a)
                     self.grid.move(a, pt)
         if params['attiva_gut']:
             self.gut_step()
         self.log()
-
+    
     def log(self):
-        alpha_gut_count = 0
-        lps_count = 0
-
+        alpha_gut_count=0
+        LPS_count=0
         if self.gut_context.contains_type(LPS.TYPE):
-            lps_count = self.gut_context.size([LPS.TYPE])[LPS.TYPE]
-
-        if (self.gut_context.contains_type(Alpha.TYPE)):
-            alpha_gut_count = self.gut_context.size([Alpha.TYPE])[1]
-        self.counts.bifido_count = self.gut_context.size([Bifidobacteria.TYPE])[Bifidobacteria.TYPE]
-        self.counts.alpha_count = self.context.size([Alpha.TYPE])[1]
-        self.counts.alpha_gut_count = alpha_gut_count
-        self.counts.gram_negative_count = self.gut_context.size([GramNegative.TYPE])[GramNegative.TYPE]
-        self.counts.LPS_count = lps_count
+            LPS_count=self.gut_context.size([LPS.TYPE])[LPS.TYPE]
+        if(self.gut_context.contains_type(Alpha.TYPE)):
+            alpha_gut_count=self.gut_context.size([Alpha.TYPE])[1]
+        self.counts.bifido_count=self.gut_context.size([Bifidobacteria.TYPE])[Bifidobacteria.TYPE]
+        self.counts.alpha_count=self.context.size([Alpha.TYPE])[1]
+        self.counts.alpha_gut_count=alpha_gut_count
+        self.counts.gram_negative_count=self.gut_context.size([GramNegative.TYPE])[GramNegative.TYPE]
+        self.counts.LPS_count=LPS_count
         self.data_set.log(self.runner.schedule.tick)
-
         for agent in self.gut_context.agents(GramNegative.TYPE):
-            self.agent_gut_pos.log_row(self.runner.schedule.tick, agent.TYPE, self.gut_grid.get_location(agent).x,
-                                       self.gut_grid.get_location(agent).y)
+            self.agent_gut_pos.log_row(self.runner.schedule.tick,agent.TYPE,self.gut_grid.get_location(agent).x,self.gut_grid.get_location(agent).y)
         for agent in self.gut_context.agents(Bifidobacteria.TYPE):
-            self.agent_gut_pos.log_row(self.runner.schedule.tick, agent.TYPE, self.gut_grid.get_location(agent).x,
-                                       self.gut_grid.get_location(agent).y)
+            self.agent_gut_pos.log_row(self.runner.schedule.tick,agent.TYPE,self.gut_grid.get_location(agent).x,self.gut_grid.get_location(agent).y)
         if self.gut_context.contains_type(LPS.TYPE):
             for agent in self.gut_context.agents(LPS.TYPE):
-                self.agent_gut_pos.log_row(self.runner.schedule.tick, agent.TYPE, self.gut_grid.get_location(agent).x,
-                                           self.gut_grid.get_location(agent).y)
-
+                self.agent_gut_pos.log_row(self.runner.schedule.tick,agent.TYPE,self.gut_grid.get_location(agent).x,self.gut_grid.get_location(agent).y)
         for agent in self.gut_context.agents(GutNeuron.TYPE):
-            self.agent_gut_pos.log_row(self.runner.schedule.tick, agent.TYPE, self.gut_grid.get_location(agent).x,
-                                       self.gut_grid.get_location(agent).y)
+            self.agent_gut_pos.log_row(self.runner.schedule.tick,agent.TYPE,self.gut_grid.get_location(agent).x,self.gut_grid.get_location(agent).y)
         for agent in self.gut_context.agents(Alpha.TYPE):
-            self.agent_gut_pos.log_row(self.runner.schedule.tick, agent.TYPE, self.gut_grid.get_location(agent).x,
-                                       self.gut_grid.get_location(agent).y)
+            self.agent_gut_pos.log_row(self.runner.schedule.tick,agent.TYPE,self.gut_grid.get_location(agent).x,self.gut_grid.get_location(agent).y)
         self.agent_gut_pos.write()
-
         for agent in self.context.agents(Neuron.TYPE):
-            self.agent_cns_pos.log_row(self.runner.schedule.tick, agent.TYPE, self.grid.get_location(agent).x,
-                                       self.grid.get_location(agent).y, agent.state)
+            self.agent_cns_pos.log_row(self.runner.schedule.tick,agent.TYPE,self.grid.get_location(agent).x,self.grid.get_location(agent).y,agent.state,False)
         for agent in self.context.agents(Alpha.TYPE):
-            self.agent_cns_pos.log_row(self.runner.schedule.tick, agent.TYPE, self.grid.get_location(agent).x,
-                                       self.grid.get_location(agent).y, 0)
+            self.agent_cns_pos.log_row(self.runner.schedule.tick,agent.TYPE,self.grid.get_location(agent).x,self.grid.get_location(agent).y,0,agent.came_from_gut)
         self.agent_cns_pos.write()
+        
+    def log_nueron(self):
+        balanced=0
+        misfolding=0
+        oligomer=0
+        lewy_bodies=0
+        self.neuron_counter
+        for agent in self.context.agents(Neuron.TYPE):
+            if agent.state==0:
+                balanced+=1
+            if agent.state==1:
+                misfolding+=1
+            if agent.state==2:
+                oligomer+=1
+            if agent.state==3:
+                lewy_bodies+=1
+        folding = np.zeros(1, dtype='int64')
+        misfo = np.zeros(1, dtype='int64')
+        oligo = np.zeros(1, dtype='int64')
+        lewy= np.zeros(1,dtype='int64')
+        self.comm.Reduce(np.array([balanced], dtype='int64'), folding, op=MPI.SUM, root=0)
+        self.comm.Reduce(np.array([misfolding], dtype='int64'), misfo, op=MPI.SUM, root=0)
+        self.comm.Reduce(np.array([oligomer], dtype='int64'), oligo, op=MPI.SUM, root=0)
+        self.comm.Reduce(np.array([lewy_bodies],dtype='int64'),lewy, op=MPI.SUM, root=0)
+        if self.rank==0:
+            self.neuron_counter.log_row(self.runner.schedule.tick,folding[0],misfo[0],oligo[0],lewy[0])
+        self.neuron_counter.write()
 
     def neuron_step(self):
         new_neuron_spreaders = []
@@ -639,6 +669,7 @@ class Model:
 
         for agent in self.context.agents(Neuron.TYPE):
             agent.step()
+        
 
     def gut_step(self):
         if self.runner.schedule.tick % 10 == 0:
@@ -694,13 +725,13 @@ class Model:
         local_bounds = self.grid.get_local_bounds()
         for alpha in spread_alpha:
             self.gut_context.remove(alpha)
-            self.passed_proteins += 1
-
+            self.passedProteins+=1
             if params['flag_enabling_move_between_system']:
                 x = int(rng.uniform(local_bounds.xmin, local_bounds.xmin + local_bounds.xextent))
                 y = int(rng.uniform(local_bounds.ymin, local_bounds.ymin + local_bounds.yextent))
                 pt = DiscretePoint(x, y, 0)
                 alpha.in_CNS = True
+                alpha.came_from_gut=True
                 self.context.add(alpha)
                 self.grid.move(alpha, pt)
 
@@ -708,7 +739,7 @@ class Model:
         self.gut_context.synchronize(restore_agent_gut)
 
     def generate_lps(self, g_neg):
-        for _ in range(params['lps_release'] + int(self.runner.schedule.tick / 100)):
+        for _ in range(params['lps_release']+int(self.runner.schedule.tick / 100)):
             self.lps_count += 1
             lps = LPS(self.lps_count, self.rank, g_neg.pt)
             self.gut_context.add(lps)
@@ -718,7 +749,7 @@ class Model:
         local_bounds_gut = self.gut_grid.get_local_bounds()
 
         # Generate Gram-negative
-        for _ in range(params['gram_negative'] + int(self.runner.schedule.tick / 100)):
+        for _ in range(params['gram_negative']+ int(self.runner.schedule.tick / 100)):
             x = int(rng.uniform(local_bounds_gut.xmin, local_bounds_gut.xmin + local_bounds_gut.xextent))
             y = int(rng.uniform(local_bounds_gut.ymin, local_bounds_gut.ymin + local_bounds_gut.yextent))
             pt = DiscretePoint(x, y, 0)
@@ -738,7 +769,7 @@ class Model:
             self.gut_grid.move(bifido, pt)
 
         # Generate Alpha
-        for _ in range((1 + int(self.lps_count / params['generation_alpha_gut']))):
+        for _ in range((0 + int(self.lps_count / params['generation_alpha_gut']))):
             x = int(rng.uniform(local_bounds_gut.xmin, local_bounds_gut.xmin + local_bounds_gut.xextent))
             y = int(rng.uniform(local_bounds_gut.ymin, local_bounds_gut.ymin + local_bounds_gut.yextent))
             pt = DiscretePoint(x, y, 0)
@@ -792,17 +823,17 @@ class Model:
         self.data_set.close()
         self.agent_gut_pos.close()
         self.agent_cns_pos.close()
+        self.neuron_counter.close()
         # self.bifido_pos.close()
         for agent in self.context.agents(Neuron.TYPE):
             print(agent, agent.alpha_synuclein_level, agent.misfolding_level, agent.oligomer_level,
                   agent.lewy_bodies_level)
         # print(self.context.size([Alpha.TYPE, Neuron.TYPE]))
         if params['attiva_gut']:
-            print("GUT",
-                  self.gut_context.size([LPS.TYPE, GramNegative.TYPE, Bifidobacteria.TYPE, Alpha.TYPE, GutNeuron.TYPE]))
+            print("GUT", self.gut_context.size([LPS.TYPE, GramNegative.TYPE, Bifidobacteria.TYPE, Alpha.TYPE, GutNeuron.TYPE]))
         if params['attiva_CNS']:
             print("CNS", self.context.size([Alpha.TYPE, Neuron.TYPE]))
-        print("proteine passate", self.passed_proteins)
+        print("proteine passate",self.passedProteins)
         # for agent in self.context.agents(Alpha.TYPE):
         #     print(agent,agent.misfolding_level,agent.alpha_synuclein_level)
 

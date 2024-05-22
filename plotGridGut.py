@@ -16,7 +16,7 @@ def update(frame):
     plt.ylim(0, 200)  # Set Y-axis limit
     plt.xlabel('X')
     plt.ylabel('Y')
-    plt.title('Bifido in red Agent Movement over Time (Tick {})'.format(frame))
+    plt.title('Bifido in red, alpha black, lps yellow, neuron green, gram-neagative blue (Tick {})'.format(frame))
 
     # Draw grid
     plt.grid(True)
